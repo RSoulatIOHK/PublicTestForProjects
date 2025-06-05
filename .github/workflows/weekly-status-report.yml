@@ -168,10 +168,12 @@ jobs:
             return reportMarkdown;
 
       - name: Write report to temporary file
-        id: write_file # Give this step an id
+        id: write_file
+        env:
+          REPORT_BODY: ${{ steps.report_content.outputs.result }} # Pass the report as an env var
         run: |
-          echo "${{ steps.report_content.outputs.result }}" > weekly_report.md
-          echo "filepath=weekly_report.md" >> $GITHUB_OUTPUT # Output the filepath
+          printf "%s" "$REPORT_BODY" > weekly_report.md
+          echo "filepath=weekly_report.md" >> $GITHUB_OUTPUT
 
       - name: Create Report Issue
         uses: peter-evans/create-issue-from-file@v5
