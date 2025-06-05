@@ -8,24 +8,26 @@ jobs:
   add_to_project:
     runs-on: ubuntu-latest
     steps:
-      - name: Add issue to project, label, and fill fields
+      - name: Add "needs triage" label
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.Project_bot_issues }}
           script: |
-            const projectId = 'PVT_kwHOBwWtRc4A6wWB'
-            const label = 'needs triage'
-
-            // Step 1: Add label to issue
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              labels: [label]
+              labels: ['needs triage']
             })
 
-            // Step 2: Get issue node ID
-            const issueId = (await github.graphql(`
+      - name: Get issue ID
+        id: get_issue_id
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.Project_bot_issues }}
+          result-encoding: string
+          script: |
+            const result = await github.graphql(`
               query {
                 repository(owner: "${context.repo.owner}", name: "${context.repo.repo}") {
                   issue(number: ${context.issue.number}) {
@@ -33,48 +35,57 @@ jobs:
                   }
                 }
               }
-            `)).repository.issue.id;
+            `)
+            return result.repository.issue.id;
 
-            // Step 3: Add issue to project and get item ID
-            const addItemResponse = await github.graphql(`
+      - name: Add to project board
+        id: add_to_project
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.Project_bot_issues }}
+          result-encoding: string
+          script: |
+            const result = await github.graphql(`
               mutation {
                 addProjectV2ItemById(input: {
-                  projectId: "${projectId}",
-                  contentId: "${issueId}"
+                  projectId: "PVT_kwHOBwWtRc4A6wWB",
+                  contentId: "${{ steps.get_issue_id.outputs.result }}"
                 }) {
                   item {
                     id
                   }
                 }
               }
-            `);
-            const itemId = addItemResponse.addProjectV2ItemById.item.id;
+            `)
+            return result.addProjectV2ItemById.item.id;
 
-            // Step 4: Fill project fields
+      - name: Fill project fields
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.Project_bot_issues }}
+          script: |
+            const projectId = 'PVT_kwHOBwWtRc4A6wWB'
+            const itemId = '${{ steps.add_to_project.outputs.result }}'
+
             const fieldUpdates = [
               {
-                // Status = Backlog
-                fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvQZ6A",
+                fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvQZ6A", // Status = Backlog
                 value: { singleSelectOptionId: "78730804" }
               },
               {
-                // Priority = Medium
-                fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvQZ9o",
+                fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvQZ9o", // Priority = Medium
                 value: { singleSelectOptionId: "8ca69e6f" }
               },
               {
-                // Size = M
-                fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvQZ9s",
+                fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvQZ9s", // Size = M
                 value: { singleSelectOptionId: "1cc05ec6" }
               },
               {
-                // Type = Tasks
-                fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvRHDE",
+                fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvRHDE", // Type = Tasks
                 value: { singleSelectOptionId: "0d73c906" }
               },
               {
-                // QPP Objective = Objective 1
-                fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvQdmw",
+                fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvQdmw", // QPP Objective = Objective 1
                 value: { singleSelectOptionId: "2f4a21a3" }
               }
             ]
@@ -93,10 +104,5 @@ jobs:
                     }
                   }
                 }
-              `, {
-                projectId,
-                itemId,
-                fieldId,
-                value
-              });
+              `, { projectId, itemId, fieldId, value });
             }
