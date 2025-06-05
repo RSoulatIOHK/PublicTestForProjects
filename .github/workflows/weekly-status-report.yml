@@ -1,0 +1,187 @@
+name: Weekly Issue Status Report
+
+on:
+  schedule:
+    - cron: '0 8 * * 1' # Runs at 8 AM UTC every Monday
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  generate_report:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }} # Your PAT with repo and project scopes
+      PROJECT_ID: ${{ secrets.PROJECT_ID }} # e.g., PVT_kwHOBwWtRc4A6wWB
+      STATUS_FIELD_NAME: ${{ vars.STATUS_FIELD_NAME || 'Status' }} # Project's status field name, fallback to 'Status'
+      TARGET_REPO_OWNER: ${{ github.repository_owner }} # Assumes running in the same repo, or set explicitly
+      TARGET_REPO_NAME: ${{ github.event.repository.name || github.repository_owner } } # Assumes running in same repo, or set explicitly
+      REPORT_ISSUE_ASSIGNEE: ${{ vars.REPORT_ISSUE_ASSIGNEE || '' }}
+
+    steps:
+      - name: Calculate Dates
+        id: dates
+        run: |
+          echo "CURRENT_DATE=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          echo "ONE_WEEK_AGO_ISO=$(date -u -d '7 days ago' +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+          echo "ONE_WEEK_AGO_DATE=$(date -u -d '7 days ago' +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Generate Report Content
+        id: report_content
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ env.GH_TOKEN }}
+          script: |
+            const { Octokit } = require("@octokit/rest");
+            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
+
+            const projectId = process.env.PROJECT_ID;
+            const statusFieldName = process.env.STATUS_FIELD_NAME;
+            const owner = process.env.TARGET_REPO_OWNER;
+            const repo = process.env.TARGET_REPO_NAME;
+            const oneWeekAgoISO = "${{ steps.dates.outputs.ONE_WEEK_AGO_ISO }}";
+            
+            let reportMarkdown = `## Issue Status Report for Week Ending ${{ steps.dates.outputs.CURRENT_DATE }}\n\n`;
+            reportMarkdown += `Report generated from ${oneWeekAgoISO} to ${{ steps.dates.outputs.CURRENT_DATE }} UTC.\n\n`;
+
+            let projectStatusActivityIssues = [];
+            let issueStateChangeEvents = [];
+
+            // --- 1. Project Item Activity (Items updated in the project this week) ---
+            reportMarkdown += `### Project Items Activity (Project: ${projectId})\n`;
+            reportMarkdown += `_(Items whose project card was updated in the last week, showing current status)_\n\n`;
+            
+            try {
+              let projectItems = [];
+              let hasNextPageItems = true;
+              let endCursorItems = null;
+
+              while(hasNextPageItems) {
+                const projectQuery = \`
+                  query($projectId: ID!, $cursor: String) {
+                    node(id: $projectId) {
+                      ... on ProjectV2 {
+                        items(first: 100, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
+                          pageInfo {
+                            hasNextPage
+                            endCursor
+                          }
+                          nodes {
+                            id
+                            updatedAt
+                            content {
+                              ... on Issue { id number title url }
+                              ... on PullRequest { id number title url }
+                            }
+                            fieldValueByName(name: "${statusFieldName}") {
+                              ... on ProjectV2ItemFieldSingleSelectValue { name optionId }
+                              # Add other field types if your status is not single-select
+                              # ... on ProjectV2ItemFieldTextValue { text } 
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }\`;
+                const projectResult = await github.graphql(projectQuery, { projectId: projectId, cursor: endCursorItems });
+                
+                if (projectResult.node && projectResult.node.items) {
+                  projectItems = projectItems.concat(projectResult.node.items.nodes);
+                  hasNextPageItems = projectResult.node.items.pageInfo.hasNextPage;
+                  endCursorItems = projectResult.node.items.pageInfo.endCursor;
+                  if (projectResult.node.items.nodes.length > 0 && new Date(projectResult.node.items.nodes[projectResult.node.items.nodes.length -1].updatedAt) < new Date(oneWeekAgoISO) && !hasNextPageItems) {
+                      // If the last item of the current page is already older than our timeframe and no more pages, we can stop early.
+                      // More precise filtering below ensures this.
+                  }
+                } else {
+                  hasNextPageItems = false;
+                }
+              }
+              
+              const recentProjectItems = projectItems.filter(item => new Date(item.updatedAt) >= new Date(oneWeekAgoISO) && item.content);
+              if (recentProjectItems.length > 0) {
+                for (const item of recentProjectItems) {
+                  const statusValue = item.fieldValueByName ? (item.fieldValueByName.name || 'N/A') : 'N/A (Field not found)';
+                  projectStatusActivityIssues.push({
+                    number: item.content.number,
+                    title: item.content.title,
+                    url: item.content.url,
+                    currentProjectStatus: statusValue,
+                    projectItemUpdatedAt: item.updatedAt
+                  });
+                  reportMarkdown += `* [#${item.content.number} ${item.content.title}](${item.content.url}) - Current Project Status: **${statusValue}** (Project item updated: ${new Date(item.updatedAt).toISOString().split('T')[0]})\n`;
+                }
+              } else {
+                reportMarkdown += "* No project items were updated this week.\n";
+              }
+            } catch (error) {
+              console.error("Error fetching project items:", error);
+              reportMarkdown += "* Error fetching project item activity.\n";
+            }
+            reportMarkdown += "\n";
+
+            // --- 2. Issue State Changes (Closed/Reopened) ---
+            reportMarkdown += `### Issues Closed or Reopened This Week (Repo: ${owner}/${repo})\n\n`;
+            try {
+              const eventsPaginator = octokit.paginate.iterator(octokit.rest.issues.listEventsForRepo, {
+                owner: owner,
+                repo: repo,
+                per_page: 100,
+                since: oneWeekAgoISO // Filter events since one week ago
+              });
+
+              let foundEvents = [];
+              for await (const { data: events } of eventsPaginator) {
+                for (const event of events) {
+                  // Ensure event.created_at is not before oneWeekAgoISO, though `since` should handle it
+                  if (new Date(event.created_at) < new Date(oneWeekAgoISO)) continue;
+
+                  if (event.event === 'closed' || event.event === 'reopened') {
+                    // Fetch issue details if not sufficiently present in event.issue (title often is)
+                    // For simplicity, we assume event.issue.title is available.
+                    // If not, an additional call to octokit.rest.issues.get({ owner, repo, issue_number: event.issue.number }) would be needed.
+                    if (!event.issue) continue; // Skip if no issue context
+
+                    foundEvents.push({
+                      number: event.issue.number,
+                      title: event.issue.title || `Issue #${event.issue.number}`,
+                      url: event.issue.html_url,
+                      action: event.event,
+                      date: event.created_at
+                    });
+                  }
+                }
+              }
+              
+              if (foundEvents.length > 0) {
+                 // Sort by date for clarity
+                foundEvents.sort((a,b) => new Date(b.date) - new Date(a.date));
+                for (const change of foundEvents) {
+                  reportMarkdown += `* [#${change.number} ${change.title}](${change.url}) - **${change.action.charAt(0).toUpperCase() + change.action.slice(1)}** on ${new Date(change.date).toISOString().split('T')[0]}\n`;
+                }
+              } else {
+                reportMarkdown += "* No issues were closed or reopened this week.\n";
+              }
+            } catch (error) {
+              console.error("Error fetching issue events:", error);
+              reportMarkdown += "* Error fetching issue close/reopen events.\n";
+            }
+            reportMarkdown += "\n";
+            
+            // You can add more sections here, e.g., for specific label changes if needed.
+
+            return reportMarkdown;
+
+      - name: Write report to temporary file
+        id: write_file # Give this step an id
+        run: |
+          echo "${{ steps.report_content.outputs.result }}" > weekly_report.md
+          echo "filepath=weekly_report.md" >> $GITHUB_OUTPUT # Output the filepath
+
+      - name: Create Report Issue
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          token: ${{ env.GH_TOKEN }}
+          title: "Weekly Issue Status Report - Week of ${{ steps.dates.outputs.ONE_WEEK_AGO_DATE }}"
+          content-filepath: ${{ steps.write_file.outputs.filepath }} # Use the filepath from the previous step
+          # body: ${{ steps.report_content.outputs.result }} <--- REMOVE THIS LINE
+          labels: report, automation
+          assignees: ${{ env.REPORT_ISSUE_ASSIGNEE }}
