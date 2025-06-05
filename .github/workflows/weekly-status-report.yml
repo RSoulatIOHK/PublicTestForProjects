@@ -30,24 +30,26 @@ jobs:
         with:
           github-token: ${{ env.GH_TOKEN }}
           script: |
-            const { Octokit } = require("@octokit/rest");
-            const octokit = new Octokit({ auth: process.env.GH_TOKEN });
+            // Access pre-configured Octokit via the 'github' global
+            // const { Octokit } = require("@octokit/rest"); // DELETE THIS LINE
+            // const octokit = new Octokit({ auth: process.env.GH_TOKEN }); // DELETE THIS LINE
 
             const projectId = process.env.PROJECT_ID;
             const statusFieldName = process.env.STATUS_FIELD_NAME;
             const owner = process.env.TARGET_REPO_OWNER;
             const repo = process.env.TARGET_REPO_NAME;
             const oneWeekAgoISO = "${{ steps.dates.outputs.ONE_WEEK_AGO_ISO }}";
+            const currentDate = "${{ steps.dates.outputs.CURRENT_DATE }}"; // Get current date for report title
             
-            let reportMarkdown = `## Issue Status Report for Week Ending ${{ steps.dates.outputs.CURRENT_DATE }}\n\n`;
-            reportMarkdown += `Report generated from ${oneWeekAgoISO} to ${{ steps.dates.outputs.CURRENT_DATE }} UTC.\n\n`;
+            let reportMarkdown = `## Issue Status Report for Week Ending ${currentDate}\n\n`;
+            reportMarkdown += `Report generated from ${oneWeekAgoISO} to ${currentDate} UTC.\n\n`;
 
-            let projectStatusActivityIssues = [];
-            let issueStateChangeEvents = [];
+            // To access core functions like core.setFailed if needed
+            const core = require('@actions/core'); 
 
             // --- 1. Project Item Activity (Items updated in the project this week) ---
-            reportMarkdown += `### Project Items Activity (Project: ${projectId})\n`;
-            reportMarkdown += `_(Items whose project card was updated in the last week, showing current status)_\n\n`;
+            reportMarkdown += `### Project Items Activity (Project ID: ${projectId})\n`; // Using Project ID for clarity
+            reportMarkdown += `_(Items whose project card was updated in the last week, showing current status from field "${statusFieldName}")_\n\n`;
             
             try {
               let projectItems = [];
@@ -55,7 +57,7 @@ jobs:
               let endCursorItems = null;
 
               while(hasNextPageItems) {
-                const projectQuery = \`
+                const projectQuery = `
                   query($projectId: ID!, $cursor: String) {
                     node(id: $projectId) {
                       ... on ProjectV2 {
@@ -73,55 +75,56 @@ jobs:
                             }
                             fieldValueByName(name: "${statusFieldName}") {
                               ... on ProjectV2ItemFieldSingleSelectValue { name optionId }
-                              # Add other field types if your status is not single-select
-                              # ... on ProjectV2ItemFieldTextValue { text } 
+                              // Add other field types if your status is not single-select
+                              // ... on ProjectV2ItemFieldTextValue { text }
                             }
                           }
                         }
                       }
                     }
-                  }\`;
+                  }`;
                 const projectResult = await github.graphql(projectQuery, { projectId: projectId, cursor: endCursorItems });
                 
                 if (projectResult.node && projectResult.node.items) {
                   projectItems = projectItems.concat(projectResult.node.items.nodes);
                   hasNextPageItems = projectResult.node.items.pageInfo.hasNextPage;
                   endCursorItems = projectResult.node.items.pageInfo.endCursor;
-                  if (projectResult.node.items.nodes.length > 0 && new Date(projectResult.node.items.nodes[projectResult.node.items.nodes.length -1].updatedAt) < new Date(oneWeekAgoISO) && !hasNextPageItems) {
-                      // If the last item of the current page is already older than our timeframe and no more pages, we can stop early.
-                      // More precise filtering below ensures this.
+
+                  // Stop fetching if the last fetched item is already older than our window
+                  if (projectResult.node.items.nodes.length > 0) {
+                    const lastItem = projectResult.node.items.nodes[projectResult.node.items.nodes.length - 1];
+                    if (new Date(lastItem.updatedAt) < new Date(oneWeekAgoISO)) {
+                       // If the oldest item on this page is older than our period,
+                       // and items are ordered by UPDATED_AT DESC, we might not need to continue if hasNextPage is true.
+                       // However, the main filter below will correctly select only recent items.
+                    }
                   }
                 } else {
-                  hasNextPageItems = false;
+                  hasNextPageItems = false; // Should not happen if projectResult.node is valid
                 }
               }
               
-              const recentProjectItems = projectItems.filter(item => new Date(item.updatedAt) >= new Date(oneWeekAgoISO) && item.content);
+              const recentProjectItems = projectItems.filter(item => item && item.content && new Date(item.updatedAt) >= new Date(oneWeekAgoISO));
               if (recentProjectItems.length > 0) {
                 for (const item of recentProjectItems) {
-                  const statusValue = item.fieldValueByName ? (item.fieldValueByName.name || 'N/A') : 'N/A (Field not found)';
-                  projectStatusActivityIssues.push({
-                    number: item.content.number,
-                    title: item.content.title,
-                    url: item.content.url,
-                    currentProjectStatus: statusValue,
-                    projectItemUpdatedAt: item.updatedAt
-                  });
+                  const statusValue = item.fieldValueByName ? (item.fieldValueByName.name || 'N/A') : `N/A (Field '${statusFieldName}' not found or not single-select)`;
                   reportMarkdown += `* [#${item.content.number} ${item.content.title}](${item.content.url}) - Current Project Status: **${statusValue}** (Project item updated: ${new Date(item.updatedAt).toISOString().split('T')[0]})\n`;
                 }
               } else {
-                reportMarkdown += "* No project items were updated this week.\n";
+                reportMarkdown += "* No project items were updated this week (or no items found).\n";
               }
             } catch (error) {
-              console.error("Error fetching project items:", error);
-              reportMarkdown += "* Error fetching project item activity.\n";
+              console.error("Error fetching project items:", error.message);
+              core.warning(`Error fetching project items: ${error.message}`); // Use core.warning or core.error
+              reportMarkdown += `* Error fetching project item activity: ${error.message}\n`;
             }
             reportMarkdown += "\n";
 
             // --- 2. Issue State Changes (Closed/Reopened) ---
             reportMarkdown += `### Issues Closed or Reopened This Week (Repo: ${owner}/${repo})\n\n`;
             try {
-              const eventsPaginator = octokit.paginate.iterator(octokit.rest.issues.listEventsForRepo, {
+              // Use the pre-authenticated 'github.rest' and 'github.paginate'
+              const eventsPaginator = github.paginate.iterator(github.rest.issues.listEventsForRepo, {
                 owner: owner,
                 repo: repo,
                 per_page: 100,
@@ -129,15 +132,12 @@ jobs:
               });
 
               let foundEvents = [];
-              for await (const { data: events } of eventsPaginator) {
-                for (const event of events) {
-                  // Ensure event.created_at is not before oneWeekAgoISO, though `since` should handle it
+              for await (const { data: eventsPage } of eventsPaginator) { // Renamed 'events' to 'eventsPage' to avoid conflict
+                for (const event of eventsPage) {
+                  // 'since' in API call should handle this, but as a safeguard:
                   if (new Date(event.created_at) < new Date(oneWeekAgoISO)) continue;
 
                   if (event.event === 'closed' || event.event === 'reopened') {
-                    // Fetch issue details if not sufficiently present in event.issue (title often is)
-                    // For simplicity, we assume event.issue.title is available.
-                    // If not, an additional call to octokit.rest.issues.get({ owner, repo, issue_number: event.issue.number }) would be needed.
                     if (!event.issue) continue; // Skip if no issue context
 
                     foundEvents.push({
@@ -152,7 +152,7 @@ jobs:
               }
               
               if (foundEvents.length > 0) {
-                 // Sort by date for clarity
+                 // Sort by date for clarity (newest first)
                 foundEvents.sort((a,b) => new Date(b.date) - new Date(a.date));
                 for (const change of foundEvents) {
                   reportMarkdown += `* [#${change.number} ${change.title}](${change.url}) - **${change.action.charAt(0).toUpperCase() + change.action.slice(1)}** on ${new Date(change.date).toISOString().split('T')[0]}\n`;
@@ -161,13 +161,12 @@ jobs:
                 reportMarkdown += "* No issues were closed or reopened this week.\n";
               }
             } catch (error) {
-              console.error("Error fetching issue events:", error);
-              reportMarkdown += "* Error fetching issue close/reopen events.\n";
+              console.error("Error fetching issue events:", error.message);
+              core.warning(`Error fetching issue events: ${error.message}`);
+              reportMarkdown += `* Error fetching issue close/reopen events: ${error.message}\n`;
             }
             reportMarkdown += "\n";
             
-            // You can add more sections here, e.g., for specific label changes if needed.
-
             return reportMarkdown;
 
       - name: Write report to temporary file
