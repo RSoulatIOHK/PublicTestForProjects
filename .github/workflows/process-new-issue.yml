@@ -29,12 +29,6 @@ jobs:
           GH_TOKEN: ${{ secrets.Project_bot_issues }} # gh cli needs token
           GH_REPO: ${{ github.repository }}
 
-      - name: 2. Determine Product Option ID based on Repository
-        id: product_info
-        run: |
-          repo_name="${{ github.event.repository.name }}"
-          product_option_id="a2c9510c"
-
       - name: 3. Add Issue to Project and Set Product Field
         uses: actions/github-script@v7
         with:
@@ -43,7 +37,7 @@ jobs:
             const issueNodeId = "${{ github.event.issue.node_id }}";
             const projectId = process.env.PROJECT_ID;
             const productFieldId = process.env.PRODUCT_FIELD_ID;
-            const productOptionId = "${{ steps.product_info.outputs.product_option_id }}";
+            const productOptionId = process.env.PROJECT_ID;
 
             // 1. Add issue to project
             const addQuery = `
