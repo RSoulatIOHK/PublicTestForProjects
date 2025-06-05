@@ -42,152 +42,67 @@ jobs:
         id: add_to_project
         uses: actions/github-script@v7
         with:
-            github-token: ${{ secrets.Project_bot_issues }}
-            result-encoding: string
-            script: |
-                const result = await github.graphql(`
-                    mutation {
-                    addProjectV2ItemById(input: {
-                        projectId: "PVT_kwHOBwWtRc4A6wWB",
-                        contentId: "${{ steps.get_issue_id.outputs.result }}"
-                    }) {
-                        item {
-                        id
-                        }
-                    }
-                    }
-                `)
-                return result.addProjectV2ItemById.item.id;
+          github-token: ${{ secrets.Project_bot_issues }}
+          result-encoding: string
+          script: |
+            const result = await github.graphql(`
+              mutation {
+                addProjectV2ItemById(input: {
+                  projectId: "PVT_kwHOBwWtRc4A6wWB",
+                  contentId: "${{ steps.get_issue_id.outputs.result }}"
+                }) {
+                  item {
+                    id
+                  }
+                }
+              }
+            `)
+            return result.addProjectV2ItemById.item.id;
 
-      - name: Fill project fields (or inherit from parent)
+      - name: Fill project fields
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.Project_bot_issues }}
           script: |
             const projectId = 'PVT_kwHOBwWtRc4A6wWB'
             const itemId = '${{ steps.add_to_project.outputs.result }}'
-            const parentFieldId = 'PVTF_lAHOBwWtRc4A6wWBzgvQZ6c' // "Parent issue"
-            const qppFieldId = 'PVTSSF_lAHOBwWtRc4A6wWBzgvQdmw' // "QPP Objective"
 
-            // Step 1: Try to get the parent issue ID (if any)
-            const itemData = await github.graphql(`
-                query($itemId: ID!) {
-                node(id: $itemId) {
-                    ... on ProjectV2Item {
-                    fieldValues(first: 20) {
-                        nodes {
-                        ... on ProjectV2ItemFieldParentIssueValue {
-                            field {
-                            id
-                            }
-                            parentIssue {
-                            id
-                            number
-                            }
-                        }
-                        }
-                    }
-                    }
-                }
-                }
-            `, { itemId });
-
-            const parentFieldValue = itemData.node.fieldValues.nodes.find(
-                node => node.field?.id === parentFieldId
-            );
-
-            let qppValue;
-
-            if (parentFieldValue) {
-                const parentNumber = parentFieldValue.parentIssue.number;
-                const repoInfo = context.repo;
-
-                // Lookup the parent item in the same project
-                const parentIssueId = parentFieldValue.parentIssue.id;
-
-                const parentProjectItem = await github.graphql(`
-                query {
-                    node(id: "${parentIssueId}") {
-                    ... on Issue {
-                        projectItems(first: 10) {
-                        nodes {
-                            id
-                            project {
-                            id
-                            }
-                        }
-                        }
-                    }
-                    }
-                }
-                `);
-
-                const parentItemId = parentProjectItem.node.projectItems.nodes.find(p => p.project.id === projectId)?.id;
-
-                if (parentItemId) {
-                const parentFieldVals = await github.graphql(`
-                    query {
-                    node(id: "${parentItemId}") {
-                        ... on ProjectV2Item {
-                        fieldValues(first: 20) {
-                            nodes {
-                            ... on ProjectV2ItemFieldSingleSelectValue {
-                                field {
-                                id
-                                }
-                                optionId
-                            }
-                            }
-                        }
-                        }
-                    }
-                    }
-                `);
-
-                const qppFromParent = parentFieldVals.node.fieldValues.nodes.find(n => n.field.id === qppFieldId);
-                if (qppFromParent) {
-                    qppValue = qppFromParent.optionId;
-                }
-                }
-            }
-
-            // Step 2: Build field update list
             const fieldUpdates = [
-                {
+              {
                 fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvQZ6A", // Status = Backlog
-                value: { singleSelectOptionId: "78730804" }
-                },
-                {
+                value: { singleSelectOptionId: "f75ad846" }
+              },
+              {
                 fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvQZ9o", // Priority = Medium
                 value: { singleSelectOptionId: "8ca69e6f" }
-                },
-                {
+              },
+              {
                 fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvQZ9s", // Size = M
                 value: { singleSelectOptionId: "1cc05ec6" }
-                },
-                {
+              },
+              {
                 fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvRHDE", // Type = Tasks
                 value: { singleSelectOptionId: "0d73c906" }
-                },
-                {
-                fieldId: qppFieldId, // QPP Objective
-                value: { singleSelectOptionId: qppValue ?? "2f4a21a3" } // fallback to Objective 1
-                }
-            ];
+              },
+              {
+                fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvQdmw", // QPP Objective = Objective 1
+                value: { singleSelectOptionId: "2f4a21a3" }
+              }
+            ]
 
             for (const { fieldId, value } of fieldUpdates) {
-                await github.graphql(`
+              await github.graphql(`
                 mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!) {
-                    updateProjectV2ItemFieldValue(input: {
+                  updateProjectV2ItemFieldValue(input: {
                     projectId: $projectId,
                     itemId: $itemId,
                     fieldId: $fieldId,
                     value: $value
-                    }) {
+                  }) {
                     projectV2Item {
-                        id
+                      id
                     }
-                    }
+                  }
                 }
-                `, { projectId, itemId, fieldId, value });
+              `, { projectId, itemId, fieldId, value });
             }
