@@ -30,10 +30,8 @@ jobs:
         with:
           github-token: ${{ env.GH_TOKEN }}
           script: |
-            // Access pre-configured Octokit via the 'github' global
-
             const projectId = process.env.PROJECT_ID;
-            const statusFieldName = process.env.STATUS_FIELD_NAME; // This should now be 'Status'
+            const statusFieldName = process.env.STATUS_FIELD_NAME;
             const owner = process.env.TARGET_REPO_OWNER;
             const repo = process.env.TARGET_REPO_NAME;
             const oneWeekAgoISO = "${{ steps.dates.outputs.ONE_WEEK_AGO_ISO }}";
@@ -42,9 +40,9 @@ jobs:
             let reportMarkdown = `## Issue Status Report for Week Ending ${currentDate}\n\n`;
             reportMarkdown += `Report generated from ${oneWeekAgoISO} to ${currentDate} UTC.\n\n`;
 
-            // const core = require('@actions/core'); // Keep this if you removed it in the last step, or remove if 'core' already declared error appears
+            // const core = require('@actions/core');
 
-            // --- 1. Project Item Activity (Items updated in the project this week) ---
+            // --- 1. Project Item Activity ---
             reportMarkdown += `### Project Items Activity (Project ID: ${projectId})\n`;
             reportMarkdown += `_(Items whose project card was updated in the last week, showing current status from field "${statusFieldName}")_\n\n`;
             
@@ -53,15 +51,12 @@ jobs:
               let hasNextPageItems = true;
               let endCursorItems = null;
 
-              // Log the statusFieldName to be absolutely sure
-              console.log(`DEBUG: Using statusFieldName for GraphQL query: '${statusFieldName}'`);
-
               while(hasNextPageItems) {
                 const projectQuery = `
                   query($projectId: ID!, $cursor: String) {
                     node(id: $projectId) {
                       ... on ProjectV2 {
-                        items(first: 100, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
+                        items(first: 100, after: $cursor) { # <-- MODIFIED: orderBy clause is REMOVED
                           pageInfo {
                             hasNextPage
                             endCursor
@@ -73,7 +68,7 @@ jobs:
                               ... on Issue { id number title url }
                               ... on PullRequest { id number title url }
                             }
-                            fieldValueByName(name: "${statusFieldName}") { # <-- Field name used here
+                            fieldValueByName(name: "${statusFieldName}") {
                               ... on ProjectV2ItemFieldSingleSelectValue { name optionId }
                             }
                           }
@@ -81,12 +76,6 @@ jobs:
                       }
                     }
                   }`;
-
-                // ADD THIS LINE TO LOG THE FULL QUERY
-                console.log(`DEBUG: Complete GraphQL Query being sent:\n${projectQuery}`);
-                // AND LOG THE VARIABLES SEPARATELY
-                console.log(`DEBUG: GraphQL Variables: projectId='${projectId}', cursor='${endCursorItems || ''}'`);
-
                 const projectResult = await github.graphql(projectQuery, { projectId: projectId, cursor: endCursorItems });
                 
                 if (projectResult.node && projectResult.node.items) {
@@ -94,7 +83,6 @@ jobs:
                   hasNextPageItems = projectResult.node.items.pageInfo.hasNextPage;
                   endCursorItems = projectResult.node.items.pageInfo.endCursor;
                 } else {
-                  console.log("DEBUG: projectResult.node or projectResult.node.items was null/undefined.");
                   hasNextPageItems = false;
                 }
               }
@@ -110,17 +98,12 @@ jobs:
               }
             } catch (error) {
               console.error("Error fetching project items:", error.message);
-              // Log the full error object if possible, some errors have more details
-              console.error("Full error object:", JSON.stringify(error, null, 2)); 
               core.warning(`Error fetching project items: ${error.message}`);
               reportMarkdown += `* Error fetching project item activity: ${error.message}\n`;
             }
             reportMarkdown += "\n";
 
             // --- 2. Issue State Changes (Closed/Reopened) ---
-            // ... (rest of your script for closed/reopened issues) ...
-            // (This part seemed to be working fine before, so no changes needed here unless the error points to it)
-
             reportMarkdown += `### Issues Closed or Reopened This Week (Repo: ${owner}/${repo})\n\n`;
             try {
               const eventsPaginator = github.paginate.iterator(github.rest.issues.listEventsForRepo, {
@@ -134,10 +117,8 @@ jobs:
               for await (const { data: eventsPage } of eventsPaginator) {
                 for (const event of eventsPage) {
                   if (new Date(event.created_at) < new Date(oneWeekAgoISO)) continue;
-
                   if (event.event === 'closed' || event.event === 'reopened') {
                     if (!event.issue) continue;
-
                     foundEvents.push({
                       number: event.issue.number,
                       title: event.issue.title || `Issue #${event.issue.number}`,
@@ -159,20 +140,19 @@ jobs:
               }
             } catch (error) {
               console.error("Error fetching issue events:", error.message);
-              console.error("Full error object (issue events):", JSON.stringify(error, null, 2));
               core.warning(`Error fetching issue events: ${error.message}`);
               reportMarkdown += `* Error fetching issue close/reopen events: ${error.message}\n`;
             }
             reportMarkdown += "\n";
             
             return reportMarkdown;
-
       - name: Write report to temporary file
         id: write_file
         env:
-          REPORT_BODY: ${{ steps.report_content.outputs.result }} # Pass the report as an env var
+          REPORT_BODY: ${{ steps.report_content.outputs.result }}
         run: |
-          printf "%s" "$REPORT_BODY" > weekly_report.md
+          # Use %b to interpret backslash escapes like \n
+          printf "%b" "$REPORT_BODY" > weekly_report.md
           echo "filepath=weekly_report.md" >> $GITHUB_OUTPUT
 
       - name: Create Report Issue
