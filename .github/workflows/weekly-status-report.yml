@@ -9,11 +9,11 @@ jobs:
   generate_report:
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.GH_PAT }} # Your PAT with repo and project scopes
-      PROJECT_ID: ${{ secrets.PROJECT_ID }} # e.g., PVT_kwHOBwWtRc4A6wWB
+      GH_TOKEN: ${{ secrets.Project_bot_issues }} # Your PAT with repo and project scopes
+      PROJECT_ID: "PVT_kwHOBwWtRc4A6wWB" # e.g., PVT_kwHOBwWtRc4A6wWB
       STATUS_FIELD_NAME: ${{ vars.STATUS_FIELD_NAME || 'Status' }} # Project's status field name, fallback to 'Status'
       TARGET_REPO_OWNER: ${{ github.repository_owner }} # Assumes running in the same repo, or set explicitly
-      TARGET_REPO_NAME: ${{ github.event.repository.name || github.repository_owner } } # Assumes running in same repo, or set explicitly
+      TARGET_REPO_NAME: ${{ github.event.repository.name || github.repository_owner }} # Assumes running in same repo, or set explicitly
       REPORT_ISSUE_ASSIGNEE: ${{ vars.REPORT_ISSUE_ASSIGNEE || '' }}
 
     steps:
