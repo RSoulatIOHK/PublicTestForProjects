@@ -45,7 +45,7 @@ jobs:
             reportMarkdown += `Report generated from ${oneWeekAgoISO} to ${currentDate} UTC.\n\n`;
 
             // To access core functions like core.setFailed if needed
-            const core = require('@actions/core'); 
+            // const core = require('@actions/core'); 
 
             // --- 1. Project Item Activity (Items updated in the project this week) ---
             reportMarkdown += `### Project Items Activity (Project ID: ${projectId})\n`; // Using Project ID for clarity
