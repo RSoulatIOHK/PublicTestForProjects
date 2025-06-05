@@ -1,0 +1,145 @@
+name: Inherit QPP Objective from parent
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  inherit_qpp:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inherit QPP Objective from parent
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.Project_bot_issues }}
+          script: |
+            const projectId = 'PVT_kwHOBwWtRc4A6wWB'
+            const qppFieldId = 'PVTSSF_lAHOBwWtRc4A6wWBzgvQdmw'
+            const parentFieldId = 'PVTF_lAHOBwWtRc4A6wWBzgvQZ6c'
+
+            // Step 1: Get issue node ID
+            const issueId = (await github.graphql(`
+              query {
+                repository(owner: "${context.repo.owner}", name: "${context.repo.repo}") {
+                  issue(number: ${context.issue.number}) {
+                    id
+                  }
+                }
+              }
+            `)).repository.issue.id;
+
+            // Step 2: Find the project item ID of this issue
+            const projectItems = await github.graphql(`
+              query {
+                node(id: "${issueId}") {
+                  ... on Issue {
+                    projectItems(first: 10) {
+                      nodes {
+                        id
+                        project {
+                          id
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `);
+
+            const projectItem = projectItems.node.projectItems.nodes.find(item => item.project.id === projectId);
+            if (!projectItem) {
+              console.log("Issue is not yet in the project. Skipping.");
+              return;
+            }
+            const itemId = projectItem.id;
+
+            // Step 3: Look up the Parent Issue field value
+            const parentFieldValueQuery = await github.graphql(`
+              query {
+                node(id: "${itemId}") {
+                  ... on ProjectV2Item {
+                    fieldValueByField(fieldId: "${parentFieldId}") {
+                      ... on ProjectV2ItemFieldIssueValue {
+                        issue {
+                          id
+                          number
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `);
+
+            const parentIssue = parentFieldValueQuery.node.fieldValueByField?.issue;
+            if (!parentIssue) {
+              console.log("No parent issue set. Skipping.");
+              return;
+            }
+
+            // Step 4: Get the parent issue's project item ID
+            const parentItems = await github.graphql(`
+              query {
+                node(id: "${parentIssue.id}") {
+                  ... on Issue {
+                    projectItems(first: 10) {
+                      nodes {
+                        id
+                        project {
+                          id
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `);
+
+            const parentItem = parentItems.node.projectItems.nodes.find(item => item.project.id === projectId);
+            if (!parentItem) {
+              console.log("Parent issue is not in the same project. Skipping.");
+              return;
+            }
+
+            const parentItemId = parentItem.id;
+
+            // Step 5: Look up QPP Objective field on the parent item
+            const parentQppValue = await github.graphql(`
+              query {
+                node(id: "${parentItemId}") {
+                  ... on ProjectV2Item {
+                    fieldValueByField(fieldId: "${qppFieldId}") {
+                      ... on ProjectV2ItemFieldSingleSelectValue {
+                        optionId
+                      }
+                    }
+                  }
+                }
+              }
+            `);
+
+            const optionId = parentQppValue.node.fieldValueByField?.optionId;
+            if (!optionId) {
+              console.log("Parent issue has no QPP Objective set. Skipping.");
+              return;
+            }
+
+            // Step 6: Apply the same QPP Objective to the current issue
+            await github.graphql(`
+              mutation {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: "${projectId}",
+                  itemId: "${itemId}",
+                  fieldId: "${qppFieldId}",
+                  value: {
+                    singleSelectOptionId: "${optionId}"
+                  }
+                }) {
+                  projectV2Item {
+                    id
+                  }
+                }
+              }
+            `);
+
+            console.log("QPP Objective inherited successfully.");
