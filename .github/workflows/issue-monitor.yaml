@@ -70,7 +70,7 @@ jobs:
             const fieldUpdates = [
               {
                 fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvQZ6A", // Status = Backlog
-                value: { singleSelectOptionId: "78730804" }
+                value: { singleSelectOptionId: "f75ad846" }
               },
               {
                 fieldId: "PVTSSF_lAHOBwWtRc4A6wWBzgvQZ9o", // Priority = Medium
