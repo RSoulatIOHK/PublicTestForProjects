@@ -13,7 +13,7 @@ jobs:
         with:
           github-token: ${{ secrets.Project_bot_issues }}
           script: |
-            const projectId = '10'
+            const projectId = 'PVT_kwHOBwWtRc4A6wWB'
             const label = 'needs triage'
 
             // Add label to issue
