@@ -14,7 +14,7 @@ jobs:
       STATUS_FIELD_NAME: ${{ vars.STATUS_FIELD_NAME || 'Status' }} # Project's status field name, fallback to 'Status'
       TARGET_REPO_OWNER: ${{ github.repository_owner }} # Assumes running in the same repo, or set explicitly
       TARGET_REPO_NAME: ${{ github.event.repository.name || github.repository_owner }} # Assumes running in same repo, or set explicitly
-      REPORT_ISSUE_ASSIGNEE: ${{ vars.REPORT_ISSUE_ASSIGNEE || '' }}
+      REPORT_ISSUE_ASSIGNEE: "${{ vars.REPORT_ISSUE_ASSIGNEE || '' }}"
 
     steps:
       - name: Calculate Dates
@@ -31,30 +31,30 @@ jobs:
           github-token: ${{ env.GH_TOKEN }}
           script: |
             // Access pre-configured Octokit via the 'github' global
-            // const { Octokit } = require("@octokit/rest"); // DELETE THIS LINE
-            // const octokit = new Octokit({ auth: process.env.GH_TOKEN }); // DELETE THIS LINE
 
             const projectId = process.env.PROJECT_ID;
-            const statusFieldName = process.env.STATUS_FIELD_NAME;
+            const statusFieldName = process.env.STATUS_FIELD_NAME; // This should now be 'Status'
             const owner = process.env.TARGET_REPO_OWNER;
             const repo = process.env.TARGET_REPO_NAME;
             const oneWeekAgoISO = "${{ steps.dates.outputs.ONE_WEEK_AGO_ISO }}";
-            const currentDate = "${{ steps.dates.outputs.CURRENT_DATE }}"; // Get current date for report title
+            const currentDate = "${{ steps.dates.outputs.CURRENT_DATE }}";
             
             let reportMarkdown = `## Issue Status Report for Week Ending ${currentDate}\n\n`;
             reportMarkdown += `Report generated from ${oneWeekAgoISO} to ${currentDate} UTC.\n\n`;
 
-            // To access core functions like core.setFailed if needed
-            // const core = require('@actions/core'); 
+            // const core = require('@actions/core'); // Keep this if you removed it in the last step, or remove if 'core' already declared error appears
 
             // --- 1. Project Item Activity (Items updated in the project this week) ---
-            reportMarkdown += `### Project Items Activity (Project ID: ${projectId})\n`; // Using Project ID for clarity
+            reportMarkdown += `### Project Items Activity (Project ID: ${projectId})\n`;
             reportMarkdown += `_(Items whose project card was updated in the last week, showing current status from field "${statusFieldName}")_\n\n`;
             
             try {
               let projectItems = [];
               let hasNextPageItems = true;
               let endCursorItems = null;
+
+              // Log the statusFieldName to be absolutely sure
+              console.log(`DEBUG: Using statusFieldName for GraphQL query: '${statusFieldName}'`);
 
               while(hasNextPageItems) {
                 const projectQuery = `
@@ -73,34 +73,29 @@ jobs:
                               ... on Issue { id number title url }
                               ... on PullRequest { id number title url }
                             }
-                            fieldValueByName(name: "${statusFieldName}") {
+                            fieldValueByName(name: "${statusFieldName}") { # <-- Field name used here
                               ... on ProjectV2ItemFieldSingleSelectValue { name optionId }
-                              // Add other field types if your status is not single-select
-                              // ... on ProjectV2ItemFieldTextValue { text }
                             }
                           }
                         }
                       }
                     }
                   }`;
+
+                // ADD THIS LINE TO LOG THE FULL QUERY
+                console.log(`DEBUG: Complete GraphQL Query being sent:\n${projectQuery}`);
+                // AND LOG THE VARIABLES SEPARATELY
+                console.log(`DEBUG: GraphQL Variables: projectId='${projectId}', cursor='${endCursorItems || ''}'`);
+
                 const projectResult = await github.graphql(projectQuery, { projectId: projectId, cursor: endCursorItems });
                 
                 if (projectResult.node && projectResult.node.items) {
                   projectItems = projectItems.concat(projectResult.node.items.nodes);
                   hasNextPageItems = projectResult.node.items.pageInfo.hasNextPage;
                   endCursorItems = projectResult.node.items.pageInfo.endCursor;
-
-                  // Stop fetching if the last fetched item is already older than our window
-                  if (projectResult.node.items.nodes.length > 0) {
-                    const lastItem = projectResult.node.items.nodes[projectResult.node.items.nodes.length - 1];
-                    if (new Date(lastItem.updatedAt) < new Date(oneWeekAgoISO)) {
-                       // If the oldest item on this page is older than our period,
-                       // and items are ordered by UPDATED_AT DESC, we might not need to continue if hasNextPage is true.
-                       // However, the main filter below will correctly select only recent items.
-                    }
-                  }
                 } else {
-                  hasNextPageItems = false; // Should not happen if projectResult.node is valid
+                  console.log("DEBUG: projectResult.node or projectResult.node.items was null/undefined.");
+                  hasNextPageItems = false;
                 }
               }
               
@@ -115,30 +110,33 @@ jobs:
               }
             } catch (error) {
               console.error("Error fetching project items:", error.message);
-              core.warning(`Error fetching project items: ${error.message}`); // Use core.warning or core.error
+              // Log the full error object if possible, some errors have more details
+              console.error("Full error object:", JSON.stringify(error, null, 2)); 
+              core.warning(`Error fetching project items: ${error.message}`);
               reportMarkdown += `* Error fetching project item activity: ${error.message}\n`;
             }
             reportMarkdown += "\n";
 
             // --- 2. Issue State Changes (Closed/Reopened) ---
+            // ... (rest of your script for closed/reopened issues) ...
+            // (This part seemed to be working fine before, so no changes needed here unless the error points to it)
+
             reportMarkdown += `### Issues Closed or Reopened This Week (Repo: ${owner}/${repo})\n\n`;
             try {
-              // Use the pre-authenticated 'github.rest' and 'github.paginate'
               const eventsPaginator = github.paginate.iterator(github.rest.issues.listEventsForRepo, {
                 owner: owner,
                 repo: repo,
                 per_page: 100,
-                since: oneWeekAgoISO // Filter events since one week ago
+                since: oneWeekAgoISO
               });
 
               let foundEvents = [];
-              for await (const { data: eventsPage } of eventsPaginator) { // Renamed 'events' to 'eventsPage' to avoid conflict
+              for await (const { data: eventsPage } of eventsPaginator) {
                 for (const event of eventsPage) {
-                  // 'since' in API call should handle this, but as a safeguard:
                   if (new Date(event.created_at) < new Date(oneWeekAgoISO)) continue;
 
                   if (event.event === 'closed' || event.event === 'reopened') {
-                    if (!event.issue) continue; // Skip if no issue context
+                    if (!event.issue) continue;
 
                     foundEvents.push({
                       number: event.issue.number,
@@ -152,7 +150,6 @@ jobs:
               }
               
               if (foundEvents.length > 0) {
-                 // Sort by date for clarity (newest first)
                 foundEvents.sort((a,b) => new Date(b.date) - new Date(a.date));
                 for (const change of foundEvents) {
                   reportMarkdown += `* [#${change.number} ${change.title}](${change.url}) - **${change.action.charAt(0).toUpperCase() + change.action.slice(1)}** on ${new Date(change.date).toISOString().split('T')[0]}\n`;
@@ -162,6 +159,7 @@ jobs:
               }
             } catch (error) {
               console.error("Error fetching issue events:", error.message);
+              console.error("Full error object (issue events):", JSON.stringify(error, null, 2));
               core.warning(`Error fetching issue events: ${error.message}`);
               reportMarkdown += `* Error fetching issue close/reopen events: ${error.message}\n`;
             }
