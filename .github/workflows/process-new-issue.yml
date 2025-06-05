@@ -37,7 +37,7 @@ jobs:
             const issueNodeId = "${{ github.event.issue.node_id }}";
             const projectId = process.env.PROJECT_ID;
             const productFieldId = process.env.PRODUCT_FIELD_ID;
-            const productOptionId = process.env.PROJECT_ID;
+            const productOptionId = process.env.PRODUCT_OPTION_REPO_C; // This will use "a2c9510c"
 
             // 1. Add issue to project
             const addQuery = `
