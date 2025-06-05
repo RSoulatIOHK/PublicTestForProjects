@@ -16,7 +16,7 @@ jobs:
             const projectId = 'PVT_kwHOBwWtRc4A6wWB'
             const label = 'needs triage'
 
-            // Add label to issue
+            // Step 1: Add label to issue
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -24,7 +24,7 @@ jobs:
               labels: [label]
             })
 
-            // Add issue to project (GraphQL)
+            // Step 2: Get issue node ID
             const issueId = (await github.graphql(`
               query {
                 repository(owner: "${context.repo.owner}", name: "${context.repo.repo}") {
@@ -35,10 +35,11 @@ jobs:
               }
             `)).repository.issue.id;
 
-            await github.graphql(`
+            // Step 3: Add issue to project and get itemId
+            const addItemResponse = await github.graphql(`
               mutation {
                 addProjectV2ItemById(input: {
-                  projectId: "${projectId}"
+                  projectId: "${projectId}",
                   contentId: "${issueId}"
                 }) {
                   item {
@@ -47,3 +48,42 @@ jobs:
                 }
               }
             `);
+            const itemId = addItemResponse.addProjectV2ItemById.item.id;
+
+            // Step 4: Set field values (you must replace these with real IDs)
+            const fieldUpdates = [
+              {
+                fieldId: "PVTFIELD_STATUS", // e.g. "Status"
+                value: { singleSelectOptionId: "OPTION_BACKLOG" }
+              },
+              {
+                fieldId: "PVTFIELD_PRIORITY", // e.g. "Priority"
+                value: { singleSelectOptionId: "OPTION_MEDIUM" }
+              },
+              {
+                fieldId: "PVTFIELD_TYPE", // e.g. "Type"
+                value: { singleSelectOptionId: "OPTION_BUG" }
+              }
+            ];
+
+            for (const { fieldId, value } of fieldUpdates) {
+              await github.graphql(`
+                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!) {
+                  updateProjectV2ItemFieldValue(input: {
+                    projectId: $projectId,
+                    itemId: $itemId,
+                    fieldId: $fieldId,
+                    value: $value
+                  }) {
+                    projectV2Item {
+                      id
+                    }
+                  }
+                }
+              `, {
+                projectId,
+                itemId,
+                fieldId,
+                value
+              });
+            }
