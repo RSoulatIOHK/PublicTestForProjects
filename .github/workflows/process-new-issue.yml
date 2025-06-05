@@ -1,0 +1,91 @@
+name: Process New Issue
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  triage_and_add_to_project:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.Project_bot_issues }} # Use your PAT
+      PROJECT_ID: "PVT_kwHOBwWtRc4A6wWB" # Replace with your Project's Node ID
+      PRODUCT_FIELD_ID: "PVTSSF_lAHOBwWtRc4A6wWBzgvQdmw" # Replace with Product Field Node ID
+      # Define mappings for repository to Product Option ID
+      # You'll need to find these Option IDs via GraphQL
+      PRODUCT_OPTION_REPO_A: "2f4a21a3"
+      PRODUCT_OPTION_REPO_B: "bb009e5f"
+      PRODUCT_OPTION_REPO_C: "a2c9510c" # Example for another repository
+      # Add more mappings as needed
+
+    steps:
+      - name: Checkout code (optional, if you have scripts in repo)
+        uses: actions/checkout@v4
+
+      - name: 1. Add "needs-review" Label
+        run: |
+          gh issue edit ${{ github.event.issue.number }} --add-label "needs-review"
+        env:
+          GH_TOKEN: ${{ secrets.Project_bot_issues }} # gh cli needs token
+          GH_REPO: ${{ github.repository }}
+
+      - name: 2. Determine Product Option ID based on Repository
+        id: product_info
+        run: |
+          repo_name="${{ github.event.repository.name }}"
+          product_option_id="a2c9510c"
+
+      - name: 3. Add Issue to Project and Set Product Field
+        if: steps.product_info.outputs.product_option_id != '' # Only run if a product option was found
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.Project_bot_issues}}
+          script: |
+            const issueNodeId = "${{ github.event.issue.node_id }}";
+            const projectId = process.env.PROJECT_ID;
+            const productFieldId = process.env.PRODUCT_FIELD_ID;
+            const productOptionId = "${{ steps.product_info.outputs.product_option_id }}";
+
+            // 1. Add issue to project
+            const addQuery = `
+              mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
+                  item {
+                    id # This is the newly created project item's Node ID
+                  }
+                }
+              }`;
+            const addVars = { projectId: projectId, contentId: issueNodeId };
+            console.log("Adding issue to project with variables:", JSON.stringify(addVars));
+            const addItemResult = await github.graphql(addQuery, addVars);
+            const newItemId = addItemResult.addProjectV2ItemById.item.id;
+            console.log("Issue added to project. New item ID:", newItemId);
+
+            if (!newItemId) {
+              console.error("Failed to add issue to project or get new item ID.");
+              return;
+            }
+
+            // 2. Set the "Product" field for the new project item
+            const updateQuery = `
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId,
+                  itemId: $itemId,
+                  fieldId: $fieldId,
+                  value: { singleSelectOptionId: $optionId }
+                }) {
+                  projectV2Item {
+                    id
+                  }
+                }
+              }`;
+            const updateVars = {
+              projectId: projectId,
+              itemId: newItemId,
+              fieldId: productFieldId,
+              optionId: productOptionId
+            };
+            console.log("Updating product field with variables:", JSON.stringify(updateVars));
+            await github.graphql(updateQuery, updateVars);
+            console.log("Product field updated for item ID:", newItemId);
