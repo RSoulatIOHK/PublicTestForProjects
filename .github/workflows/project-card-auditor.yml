@@ -38,7 +38,7 @@ jobs:
             // This helper function checks if a field's value is considered "empty"
             function isFieldEmpty(fieldValue) {
               if (!fieldValue) return true; // Field is not set at all
-              // Check based on field type (add more __typename checks as needed)
+              // Check based on field type
               switch (fieldValue.__typename) {
                 case 'ProjectV2ItemFieldTextValue':
                   return !fieldValue.text || fieldValue.text.trim() === '';
@@ -47,7 +47,6 @@ jobs:
                 case 'ProjectV2ItemFieldUserValue':
                   return fieldValue.users.totalCount === 0;
                 case 'ProjectV2ItemFieldIterationValue':
-                  // An iteration is empty if its title is one of the "planning" ones or it's not set
                   return !fieldValue.title || fieldValue.title.includes("Planning");
                 case 'ProjectV2ItemFieldNumberValue':
                   return fieldValue.number === null;
@@ -106,7 +105,6 @@ jobs:
               const items = result.node.items.nodes;
 
               for (const item of items) {
-                // Only check items that are open issues
                 if (!item.content || item.content.__typename !== 'Issue' || item.content.state !== 'OPEN') {
                   continue;
                 }
@@ -150,7 +148,7 @@ jobs:
                 reportBody += `| [#${item.number} ${item.title}](${item.url}) | \`${item.missing}\` |\n`;
               }
             }
-            
+
             await github.rest.issues.createComment({
               owner,
               repo,
